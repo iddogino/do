@@ -56,7 +56,7 @@ base64 -i AuthKey_XXXXXXXXXX.p8 | gh secret set NOTARY_API_KEY_P8
 | --- | --- |
 | `SPARKLE_PUBLIC_KEY` | Sparkle EdDSA public key, embedded in the app as `SUPublicEDKey` |
 
-`scripts/setup-sparkle-keys.sh` creates the key pair in your login keychain (with Sparkle's `generate_keys`) and sets both `SPARKLE_PRIVATE_KEY` and `SPARKLE_PUBLIC_KEY`. Keep the keychain item backed up: losing the private key means existing installs can't verify future updates.
+`scripts/setup-sparkle-keys.sh` sets both. It keeps the key pair in the git-ignored `.env` at the repo root (mode 600), generating an Ed25519 pair with CryptoKit on first run and reusing `.env` afterwards. Before uploading anything, it checks the key round-trips through Sparkle's own `sign_update`. Back up `.env` (e.g. in a password manager): losing the private key means existing installs can't verify future updates. To sign locally with Sparkle's tools, use `sign_update --ed-key-file <(sed -n 's/^SPARKLE_PRIVATE_KEY=//p' .env) Do.dmg`.
 
 ### Updates require a public repository
 
