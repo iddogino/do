@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-toolchain
+      - name: DoCore tests
+        working-directory: Packages/DoKit
+        run: swift test --filter DoCoreTests
+
+  build:
+    name: Build app + DMG
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-toolchain
+      - name: Build Do.app
+        run: scripts/ci/build-app.sh "0.0.0-ci.${{ github.run_number }}" "${{ github.run_number }}"
+      - name: Verify bundle
+        run: |
+          test -f build/Do.app/Contents/Resources/Metadata.appintents/extract.actionsdata
+          test -d build/Do.app/Contents/Resources/mlx-swift_Cmlx.bundle
+          test -d build/Do.app/Contents/Frameworks/Sparkle.framework
+          codesign --verify --deep --strict build/Do.app
+      - name: Package DMG
+        run: scripts/make-dmg.sh build/Do.app "dist/Do-${GITHUB_SHA::7}.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Do-${{ github.sha }}
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 14

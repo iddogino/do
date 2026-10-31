@@ -1,0 +1,20 @@
+# Xcode / SwiftPM
+*.xcodeproj/
+*.xcworkspace/
+!Packages/**/*.xcworkspace/contents.xcworkspacedata
+xcuserdata/
+DerivedData/
+.build/
+.swiftpm/
+build/
+dist/
+
+# Local signing overrides
+Config/Local.xcconfig
+
+# Python (parity tooling)
+.venv/
+__pycache__/
+
+# macOS
+.DS_Store

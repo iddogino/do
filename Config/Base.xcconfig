@@ -1,0 +1,22 @@
+// Shared build settings. CI overrides these on the xcodebuild command line; for local signed
+// builds, put your overrides in Config/Local.xcconfig (git-ignored).
+
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+
+DO_BUNDLE_IDENTIFIER = com.iddogino.do
+
+// Signing. Local builds sign ad hoc ("Sign to Run Locally"); release builds in CI use the
+// Developer ID certificate from repository secrets.
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+
+// Sparkle: updates are served from the latest GitHub release's appcast.xml.
+SPARKLE_FEED_URL = https:/$()/github.com/iddogino/do/releases/latest/download/appcast.xml
+SPARKLE_PUBLIC_KEY =
+
+// Pinned Hugging Face revision of pratikgx/Mage-VL-Cowork-MLX-4bit.
+DO_MODEL_REVISION = b3d4def31e755b0c53199dc41fb90144ce4e95f0
+
+#include? "Local.xcconfig"

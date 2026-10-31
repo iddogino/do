@@ -1,0 +1,29 @@
+name: Set up Xcode toolchain
+description: Selects the newest stable Xcode, ensures the Metal toolchain (needed to compile MLX's kernels) and XcodeGen are installed, and restores the SwiftPM cache.
+
+runs:
+  using: composite
+  steps:
+    - uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+
+    - name: Toolchain
+      shell: bash
+      run: |
+        xcodebuild -version
+        if ! xcrun --find metal >/dev/null 2>&1 || ! xcrun metal --version >/dev/null 2>&1; then
+          xcodebuild -downloadComponent MetalToolchain
+        fi
+        command -v xcodegen >/dev/null || brew install xcodegen
+        xcodegen --version
+
+    - name: SwiftPM cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          build/DerivedData/SourcePackages
+          Packages/DoKit/.build/checkouts
+          Packages/DoKit/.build/repositories
+        key: spm-${{ runner.os }}-${{ hashFiles('project.yml', 'Packages/DoKit/Package.swift', 'Packages/DoKit/Package.resolved') }}
+        restore-keys: spm-${{ runner.os }}-

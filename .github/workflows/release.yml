@@ -1,0 +1,119 @@
+name: Release
+
+# Pushing a SemVer tag cuts a release:
+#   v0.1.0        → release (feeds Sparkle auto-updates)
+#   v0.1.0-rc.1   → pre-release (not served to the stable update feed)
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build, e.g. v0.1.0-rc.1
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      # Signing & notarization (all optional: without them the release ships an unsigned DMG).
+      MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+      NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+      NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      # Sparkle update signing.
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Parse version
+        id: version
+        run: |
+          if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.([0-9]+))?$ ]]; then
+            echo "::error::Tag '$TAG' is not SemVer (vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc.N)"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$([[ -n "${BASH_REMATCH[4]}" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          # Monotonic build number for Sparkle's version comparison.
+          echo "build=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup-toolchain
+
+      - name: Import signing certificate
+        id: cert
+        if: env.MACOS_CERTIFICATE_P12 != ''
+        run: echo "identity=$(scripts/ci/import-certificate.sh | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Build Do.app
+        run: scripts/ci/build-app.sh "${{ steps.version.outputs.version }}" "${{ steps.version.outputs.build }}"
+
+      - name: Sign app (Developer ID)
+        if: steps.cert.outputs.identity != ''
+        run: scripts/ci/sign-app.sh build/Do.app "${{ steps.cert.outputs.identity }}" App/Do.entitlements
+
+      - name: Notarize app
+        if: steps.cert.outputs.identity != '' && (env.NOTARY_API_KEY_ID != '' || env.APPLE_ID != '')
+        run: scripts/ci/notarize.sh build/Do.app
+
+      - name: Package DMG
+        run: |
+          DMG="dist/Do-${{ steps.version.outputs.version }}.dmg"
+          scripts/make-dmg.sh build/Do.app "$DMG" "${{ steps.cert.outputs.identity }}"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - name: Notarize DMG
+        if: steps.cert.outputs.identity != '' && (env.NOTARY_API_KEY_ID != '' || env.APPLE_ID != '')
+        run: scripts/ci/notarize.sh "$DMG"
+
+      - name: Sparkle appcast
+        if: env.SPARKLE_PRIVATE_KEY != ''
+        run: |
+          curl -sSfL "https://github.com/sparkle-project/Sparkle/releases/download/2.10.1/Sparkle-2.10.1.tar.xz" -o "$RUNNER_TEMP/sparkle.tar.xz"
+          mkdir -p "$RUNNER_TEMP/sparkle" && tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
+          SPARKLE_BIN="$RUNNER_TEMP/sparkle/bin" scripts/ci/make-appcast.sh \
+            "$DMG" "${{ steps.version.outputs.version }}" "${{ steps.version.outputs.build }}" \
+            "https://github.com/${{ github.repository }}/releases/download/$TAG/$(basename "$DMG")" \
+            "https://github.com/${{ github.repository }}/releases/tag/$TAG" \
+            dist/appcast.xml
+
+      - name: Checksums
+        run: cd dist && shasum -a 256 * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        run: |
+          NOTES="$RUNNER_TEMP/notes.md"
+          {
+            echo "## Install"
+            echo "Download **$(basename "$DMG")**, open it, and drag **Do** to Applications. Requires macOS 26 on Apple silicon."
+            if [[ -z "${{ steps.cert.outputs.identity }}" ]]; then
+              echo
+              echo "> [!WARNING]"
+              echo "> This build is **not signed or notarized**. Right-click Do.app and choose Open the first time."
+            fi
+          } > "$NOTES"
+          FLAGS=(--title "Do ${{ steps.version.outputs.version }}" --notes-file "$NOTES" --generate-notes --verify-tag)
+          [[ "${{ steps.version.outputs.prerelease }}" == "true" ]] && FLAGS+=(--prerelease) || FLAGS+=(--latest)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* "${FLAGS[@]}"
+          fi
